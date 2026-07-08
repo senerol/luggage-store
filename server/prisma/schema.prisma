@@ -1,0 +1,489 @@
+// Luggo database schema
+// PostgreSQL + Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CUSTOMER
+  PARTNER
+  ADMIN
+}
+
+enum LuggageType {
+  BACKPACK
+  SMALL_SUITCASE
+  LARGE_SUITCASE
+  OTHER
+}
+
+enum StorageStatus {
+  PENDING // awaiting admin approval
+  APPROVED
+  REJECTED
+  DISABLED // partner temporarily paused bookings
+}
+
+// Booking lifecycle. Only forward transitions defined in
+// server/src/services/bookingStateMachine.ts are allowed.
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CHECKED_IN
+  IN_STORAGE
+  READY_FOR_PICKUP
+  COLLECTED
+  CANCELLED
+  PAYMENT_FAILED
+  EXPIRED
+}
+
+enum LuggageItemStatus {
+  EXPECTED
+  CHECKED_IN
+  IN_STORAGE
+  COLLECTED
+}
+
+enum PaymentStatus {
+  CREATED
+  PAID
+  FAILED
+}
+
+enum ReportTargetType {
+  STORAGE_LOCATION
+  BOOKING
+  USER
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  CHECKED_IN
+  READY_FOR_PICKUP
+  COLLECTED
+  PARTNER_APPROVED
+  STORAGE_APPROVED
+  APPLICATION_REJECTED
+  APPLICATION_CHANGES_REQUESTED
+  PARTNER_SUSPENDED
+  PAYOUT_PAID
+  GENERIC
+}
+
+enum BusinessType {
+  HOTEL
+  HOSTEL
+  CAFE
+  SHOP
+  LUGGAGE_STORE
+  OTHER
+}
+
+// Lifecycle of a partner's application to join the marketplace. Distinct from
+// StorageLocation.status: the application gates whether the linked location
+// is allowed to go APPROVED (live/bookable) at all.
+enum ApplicationStatus {
+  PENDING_REVIEW
+  CHANGES_REQUESTED // admin asked for edits; partner may edit and resubmit
+  APPROVED
+  REJECTED
+  SUSPENDED // partner was live, then suspended by admin
+}
+
+enum PayoutStatus {
+  PENDING // ledger entry created, money not yet sent (see Payout model doc)
+  PAID
+}
+
+// Where an analytics event happened in the partner-acquisition funnel:
+// page view -> application started -> submitted -> approved -> first booking.
+// Submitted/approved/first-booking are also derivable from PartnerApplication
+// and Booking rows directly; PAGE_VIEW and APPLICATION_STARTED have no other
+// backing table, which is why this event log exists.
+enum AnalyticsEventType {
+  PARTNER_PAGE_VIEW
+  APPLICATION_STARTED
+}
+
+// ---------------------------------------------------------------------------
+// Core identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  phone        String?
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  partnerProfile StoragePartner?
+  bookings       Booking[]
+  reviews        Review[]
+  reports        Report[]
+  notifications  Notification[]
+
+  submittedApplications PartnerApplication[] @relation("Applicant")
+  reviewedApplications  PartnerApplication[] @relation("ApplicationReviewer")
+  analyticsEvents       AnalyticsEvent[]
+
+  @@index([role])
+}
+
+model StoragePartner {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName String
+  businessType BusinessType?
+  approved     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  storageLocations StorageLocation[]
+  applications     PartnerApplication[]
+  payouts          Payout[]
+}
+
+// A partner's application to join the marketplace with one storage location.
+// PENDING_REVIEW -> APPROVED flips the linked StorageLocation live; see
+// adminService.reviewApplication for the full transition logic and
+// services/README notes in server/README (or the root README) for the
+// partner-acquisition funnel this feeds.
+model PartnerApplication {
+  id     String         @id @default(cuid())
+  userId String
+  user   User           @relation("Applicant", fields: [userId], references: [id], onDelete: Cascade)
+
+  partnerId String
+  partner   StoragePartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  businessName String
+  businessType BusinessType
+  description  String
+
+  storageLocationId String          @unique
+  storageLocation   StorageLocation @relation(fields: [storageLocationId], references: [id], onDelete: Cascade)
+
+  status           ApplicationStatus @default(PENDING_REVIEW)
+  rejectionReason  String?
+  adminNote        String?
+  agreedToTermsAt  DateTime
+
+  submittedAt DateTime  @default(now())
+  reviewedAt  DateTime?
+  reviewedById String?
+  reviewedBy   User?    @relation("ApplicationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([userId])
+}
+
+// Singleton row (id is always "singleton") holding platform-wide,
+// admin-configurable settings. Read via platformConfigService so the
+// commission percentage is never hardcoded in booking/pricing logic.
+model PlatformConfig {
+  id                String   @id @default("singleton")
+  commissionPercent Decimal  @default(15) @db.Decimal(5, 2)
+  updatedAt         DateTime @updatedAt
+}
+
+// A batch settlement of a partner's earned-but-unpaid bookings. Created by an
+// admin action that sums up eligible Booking.partnerEarningsAmount rows and
+// stamps them with this Payout's id (see Booking.payoutId below). Actually
+// moving money is NOT implemented in this MVP - marking a Payout PAID here
+// records that a transfer was made through some other (manual, for now)
+// channel; wiring a real payout provider (e.g. Razorpay Route/Payouts) is a
+// documented future improvement, not faked here.
+model Payout {
+  id        String       @id @default(cuid())
+  partnerId String
+  partner   StoragePartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  amount Decimal      @db.Decimal(10, 2)
+  status PayoutStatus @default(PENDING)
+  note   String?
+
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+
+  bookings Booking[]
+
+  @@index([partnerId])
+  @@index([status])
+}
+
+// Lightweight event log backing the partner-acquisition funnel metrics
+// (page visits -> applications started -> submitted -> approved -> first
+// booking). Submitted/approved/first-booking are derived from
+// PartnerApplication/Booking directly; this table only needs to capture the
+// steps that leave no other trace. userId is nullable because a page view
+// can happen before anyone is logged in.
+model AnalyticsEvent {
+  id     String              @id @default(cuid())
+  type   AnalyticsEventType
+  userId String?
+  user   User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Storage locations
+// ---------------------------------------------------------------------------
+
+model StorageLocation {
+  id          String        @id @default(cuid())
+  partnerId   String
+  partner     StoragePartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String
+  address     String
+  city        String
+  latitude    Float
+  longitude   Float
+  landmark    String? // e.g. "opposite Rajiv Chowk metro gate 3", collected at onboarding
+  safetyInfo  String? // e.g. "CCTV monitored, staffed 24/7", shown on the details page
+
+  photos      String[] // URLs
+  capacityTotal Int // max concurrent bags across all luggage types
+
+  status      StorageStatus @default(PENDING)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  operatingHours StorageOperatingHour[]
+  priceRules     StoragePriceRule[]
+  bookings       Booking[]
+  reviews        Review[]
+  application    PartnerApplication?
+
+  @@index([city])
+  @@index([status])
+  @@index([latitude, longitude])
+}
+
+// One row per day-of-week (0 = Sunday ... 6 = Saturday). If a day is missing,
+// the location is treated as closed that day.
+model StorageOperatingHour {
+  id                String          @id @default(cuid())
+  storageLocationId String
+  storageLocation   StorageLocation @relation(fields: [storageLocationId], references: [id], onDelete: Cascade)
+
+  dayOfWeek Int // 0-6
+  openTime  String // "09:00" 24h local time
+  closeTime String // "21:00"
+
+  @@unique([storageLocationId, dayOfWeek])
+}
+
+// Price per bag per hour, per luggage type, per location.
+model StoragePriceRule {
+  id                String          @id @default(cuid())
+  storageLocationId String
+  storageLocation   StorageLocation @relation(fields: [storageLocationId], references: [id], onDelete: Cascade)
+
+  luggageType   LuggageType
+  pricePerHour  Decimal @db.Decimal(10, 2)
+
+  @@unique([storageLocationId, luggageType])
+}
+
+// ---------------------------------------------------------------------------
+// Bookings
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id                String        @id @default(cuid())
+  bookingCode       String        @unique // human-friendly, e.g. "BG-4F9K2A"
+
+  customerId        String
+  customer          User          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  storageLocationId String
+  storageLocation   StorageLocation @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
+
+  dropoffAt DateTime
+  pickupAt  DateTime
+
+  status BookingStatus @default(PENDING_PAYMENT)
+
+  // Customer-facing price breakdown (what the customer pays).
+  baseAmount    Decimal @db.Decimal(10, 2)
+  serviceFee    Decimal @db.Decimal(10, 2) // Luggo's customer-facing "Platform fee" line
+  totalAmount   Decimal @db.Decimal(10, 2) // = baseAmount + serviceFee; the actual charge
+  currency      String  @default("INR")
+
+  // Partner-facing revenue split of totalAmount, snapshotted at booking-creation
+  // time from the admin-configurable PlatformConfig.commissionPercent (see
+  // platformConfigService) so a later rate change never rewrites past bookings.
+  // partnerEarningsAmount + platformCommissionAmount == totalAmount.
+  platformCommissionPercent Decimal @db.Decimal(5, 2)
+  platformCommissionAmount  Decimal @db.Decimal(10, 2)
+  partnerEarningsAmount     Decimal @db.Decimal(10, 2)
+
+  payoutId String?
+  payout   Payout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  // Secure QR identifiers. We never encode PII in the QR — only this token.
+  // qrCheckinToken is consumed (checkinUsedAt set) on successful check-in;
+  // qrCheckoutToken is consumed (checkoutUsedAt set) on successful check-out.
+  qrCheckinToken   String    @unique
+  qrCheckoutToken  String    @unique
+  checkinUsedAt    DateTime?
+  checkoutUsedAt   DateTime?
+
+  checkedInAt   DateTime?
+  checkedOutAt  DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    BookingItem[]
+  payments Payment[]
+  review   Review?
+
+  @@index([customerId])
+  @@index([storageLocationId])
+  @@index([status])
+  @@index([payoutId])
+  // Speeds up the overlap query used for availability/capacity checks.
+  @@index([storageLocationId, dropoffAt, pickupAt])
+}
+
+// A line item: N bags of one luggage type within a booking.
+model BookingItem {
+  id        String      @id @default(cuid())
+  bookingId String
+  booking   Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  luggageType LuggageType
+  quantity    Int
+  pricePerUnit Decimal @db.Decimal(10, 2) // snapshot of the price rule at booking time
+  subtotal     Decimal @db.Decimal(10, 2)
+
+  luggageItems LuggageItem[]
+}
+
+// A physical bag instance, one per unit of a BookingItem, each with its own
+// tag so a partner can check items in/out individually if needed.
+model LuggageItem {
+  id            String            @id @default(cuid())
+  bookingItemId String
+  bookingItem   BookingItem       @relation(fields: [bookingItemId], references: [id], onDelete: Cascade)
+
+  tagCode String            @unique
+  status  LuggageItemStatus @default(EXPECTED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id        String        @id @default(cuid())
+  bookingId String
+  booking   Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  razorpayOrderId   String  @unique
+  razorpayPaymentId String? @unique
+  razorpaySignature String?
+
+  amount   Decimal @db.Decimal(10, 2)
+  currency String  @default("INR")
+  status   PaymentStatus @default(CREATED)
+
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookingId])
+}
+
+// ---------------------------------------------------------------------------
+// Reviews, reports, notifications
+// ---------------------------------------------------------------------------
+
+model Review {
+  id                String          @id @default(cuid())
+  bookingId         String          @unique
+  booking           Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  storageLocationId String
+  storageLocation   StorageLocation @relation(fields: [storageLocationId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   User   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  rating  Int // 1-5
+  comment String?
+
+  createdAt DateTime @default(now())
+
+  @@index([storageLocationId])
+}
+
+model Report {
+  id         String           @id @default(cuid())
+  reporterId String
+  reporter   User             @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  targetType ReportTargetType
+  targetId   String
+  reason     String
+  status     ReportStatus     @default(OPEN)
+  adminNote  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model Notification {
+  id      String           @id @default(cuid())
+  userId  String
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  message String
+  read    Boolean          @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}

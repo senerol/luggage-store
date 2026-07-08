@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    name: Server (build + test)
+    runs-on: ubuntu-latest
+
+    # A real Postgres instance lets the capacity/concurrency integration
+    # test (tests/booking.capacity.test.ts) actually run in CI, not just the
+    # DB-independent unit tests - see server/README notes on why that test
+    # can't be meaningfully mocked.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: luggo
+          POSTGRES_PASSWORD: luggo
+          POSTGRES_DB: luggo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U luggo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: server
+
+    env:
+      DATABASE_URL: postgresql://luggo:luggo@localhost:5432/luggo?schema=public
+      FRONTEND_URL: http://localhost:5173
+      JWT_ACCESS_SECRET: ci-test-access-secret-not-for-production-use
+      JWT_REFRESH_SECRET: ci-test-refresh-secret-not-for-production-use
+      QR_SECRET: ci-test-qr-secret-not-for-production-use
+      RAZORPAY_KEY_ID: rzp_test_cikeyplaceholder
+      RAZORPAY_KEY_SECRET: ci-test-razorpay-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # No prisma/migrations history is committed in this repo (it was built
+      # without a live Postgres instance available to generate one against -
+      # see README). `db push` syncs the schema directly instead, which is
+      # sufficient for CI's throwaway database.
+      - name: Sync database schema
+        run: npx prisma db push --skip-generate
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+  client:
+    name: Client (lint + type-check + build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: client
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build (type-checks via tsc -b, then bundles)
+        run: npm run build
