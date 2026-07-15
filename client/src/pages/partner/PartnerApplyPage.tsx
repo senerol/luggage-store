@@ -10,6 +10,12 @@ import { listMyApplications, submitApplication, SubmitApplicationInput } from "@
 import { BusinessType, OperatingHour, PriceRule } from "@/types";
 import { extractErrorMessage } from "@/api/client";
 import { logEvent } from "@/api/analytics";
+import {
+  STEP_SCHEMAS,
+  fullApplicationFormSchema,
+  firstErrorPerField,
+} from "@/validators/partnerApplicationValidators";
+import clsx from "clsx";
 
 const STEPS = ["Business", "Location", "Details", "Hours & pricing", "Review"];
 
@@ -47,12 +53,60 @@ type FormState = {
   agreedToTerms: boolean;
 };
 
+// The exact slice of `form` each step's schema validates - field names match
+// the corresponding Zod schema 1:1 (see partnerApplicationValidators.ts).
+function sliceForStep(step: number, form: FormState) {
+  switch (step) {
+    case 0:
+      return { businessName: form.businessName, businessType: form.businessType, description: form.description };
+    case 1:
+      return {
+        locationName: form.locationName,
+        address: form.address,
+        city: form.city,
+        landmark: form.landmark,
+        latitude: form.latitude,
+        longitude: form.longitude,
+      };
+    case 2:
+      return {
+        locationDescription: form.locationDescription,
+        safetyInfo: form.safetyInfo,
+        capacityTotal: form.capacityTotal,
+        photos: form.photos.map((p) => p.trim()).filter(Boolean),
+      };
+    case 3:
+      return { operatingHours: form.operatingHours, priceRules: form.priceRules };
+    default:
+      return { agreedToTerms: form.agreedToTerms };
+  }
+}
+
+function fullFormPayload(form: FormState) {
+  return {
+    ...sliceForStep(0, form),
+    ...sliceForStep(1, form),
+    ...sliceForStep(2, form),
+    ...sliceForStep(3, form),
+    ...sliceForStep(4, form),
+  };
+}
+
+const errorClass = "mt-1 text-xs text-red-600";
+function fieldClass(hasError: boolean) {
+  return clsx(
+    "mt-1 w-full rounded-lg border px-3 py-2 text-sm",
+    hasError ? "border-red-300 focus:border-red-400" : "border-ink-200"
+  );
+}
+
 export default function PartnerApplyPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [resubmitting, setResubmitting] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [form, setForm] = useState<FormState>({
     businessName: "",
     businessType: "SHOP",
@@ -104,23 +158,46 @@ export default function PartnerApplyPage() {
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+    // Clear that field's error as soon as the user changes it, rather than
+    // leaving a stale message up until the next Continue click.
+    setErrors((e) => {
+      if (!(key in e)) return e;
+      const next = { ...e };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function validateStep(stepIndex: number): boolean {
+    const schema = STEP_SCHEMAS[stepIndex];
+    const result = schema.safeParse(sliceForStep(stepIndex, form));
+    if (result.success) {
+      setErrors({});
+      return true;
+    }
+    setErrors(firstErrorPerField(result.error));
+    return false;
+  }
+
+  function handleContinue() {
+    if (validateStep(step)) setStep(step + 1);
   }
 
   async function handleSubmit() {
-    if (!form.agreedToTerms) {
-      toast.error("You must agree to the partner terms to submit.");
-      return;
-    }
-    if (form.priceRules.length === 0) {
-      toast.error("Add at least one price rule.");
-      return;
-    }
-    const photos = form.photos.filter((p) => p.trim());
-    if (photos.length === 0) {
-      toast.error("Add at least one photo of your storage area.");
+    // Final, complete validation across every step's fields - a safety net
+    // independent of how the user navigated back and forth to get here.
+    // The backend's own schema remains the authoritative check regardless;
+    // this only saves a round trip for obviously incomplete data.
+    const result = fullApplicationFormSchema.safeParse(fullFormPayload(form));
+    if (!result.success) {
+      const fieldErrors = firstErrorPerField(result.error);
+      setErrors(fieldErrors);
+      const firstMessage = Object.values(fieldErrors)[0];
+      toast.error(firstMessage ?? "Please fix the highlighted fields before submitting.");
       return;
     }
 
+    const photos = form.photos.map((p) => p.trim()).filter(Boolean);
     const payload: SubmitApplicationInput = {
       businessName: form.businessName,
       businessType: form.businessType,
@@ -170,21 +247,37 @@ export default function PartnerApplyPage() {
           <div className="space-y-4">
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Business name</span>
-              <input value={form.businessName} onChange={(e) => update("businessName", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+              <input
+                value={form.businessName}
+                onChange={(e) => update("businessName", e.target.value)}
+                className={fieldClass(!!errors.businessName)}
+              />
+              {errors.businessName && <p className={errorClass}>{errors.businessName}</p>}
             </label>
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Business type</span>
-              <select value={form.businessType} onChange={(e) => update("businessType", e.target.value as BusinessType)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm">
+              <select
+                value={form.businessType}
+                onChange={(e) => update("businessType", e.target.value as BusinessType)}
+                className={fieldClass(!!errors.businessType)}
+              >
                 {BUSINESS_TYPES.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
                   </option>
                 ))}
               </select>
+              {errors.businessType && <p className={errorClass}>{errors.businessType}</p>}
             </label>
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Tell us about your business</span>
-              <textarea rows={3} value={form.description} onChange={(e) => update("description", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+              <textarea
+                rows={3}
+                value={form.description}
+                onChange={(e) => update("description", e.target.value)}
+                className={fieldClass(!!errors.description)}
+              />
+              {errors.description && <p className={errorClass}>{errors.description}</p>}
             </label>
           </div>
         )}
@@ -193,30 +286,64 @@ export default function PartnerApplyPage() {
           <div className="space-y-4">
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Location name</span>
-              <input value={form.locationName} onChange={(e) => update("locationName", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+              <input
+                value={form.locationName}
+                onChange={(e) => update("locationName", e.target.value)}
+                className={fieldClass(!!errors.locationName)}
+              />
+              {errors.locationName && <p className={errorClass}>{errors.locationName}</p>}
             </label>
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Full address</span>
-              <input value={form.address} onChange={(e) => update("address", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+              <input
+                value={form.address}
+                onChange={(e) => update("address", e.target.value)}
+                className={fieldClass(!!errors.address)}
+              />
+              {errors.address && <p className={errorClass}>{errors.address}</p>}
             </label>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
                 <span className="text-sm font-medium text-ink-700">City</span>
-                <input value={form.city} onChange={(e) => update("city", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+                <input
+                  value={form.city}
+                  onChange={(e) => update("city", e.target.value)}
+                  className={fieldClass(!!errors.city)}
+                />
+                {errors.city && <p className={errorClass}>{errors.city}</p>}
               </label>
               <label className="block">
                 <span className="text-sm font-medium text-ink-700">Nearby landmark (optional)</span>
-                <input value={form.landmark} onChange={(e) => update("landmark", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+                <input
+                  value={form.landmark}
+                  onChange={(e) => update("landmark", e.target.value)}
+                  className={fieldClass(!!errors.landmark)}
+                />
+                {errors.landmark && <p className={errorClass}>{errors.landmark}</p>}
               </label>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
                 <span className="text-sm font-medium text-ink-700">Latitude</span>
-                <input type="number" step="any" value={form.latitude} onChange={(e) => update("latitude", Number(e.target.value))} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+                <input
+                  type="number"
+                  step="any"
+                  value={form.latitude}
+                  onChange={(e) => update("latitude", Number(e.target.value))}
+                  className={fieldClass(!!errors.latitude)}
+                />
+                {errors.latitude && <p className={errorClass}>{errors.latitude}</p>}
               </label>
               <label className="block">
                 <span className="text-sm font-medium text-ink-700">Longitude</span>
-                <input type="number" step="any" value={form.longitude} onChange={(e) => update("longitude", Number(e.target.value))} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+                <input
+                  type="number"
+                  step="any"
+                  value={form.longitude}
+                  onChange={(e) => update("longitude", Number(e.target.value))}
+                  className={fieldClass(!!errors.longitude)}
+                />
+                {errors.longitude && <p className={errorClass}>{errors.longitude}</p>}
               </label>
             </div>
             <p className="text-xs text-ink-400">
@@ -233,7 +360,13 @@ export default function PartnerApplyPage() {
           <div className="space-y-4">
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Storage area description</span>
-              <textarea rows={3} value={form.locationDescription} onChange={(e) => update("locationDescription", e.target.value)} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+              <textarea
+                rows={3}
+                value={form.locationDescription}
+                onChange={(e) => update("locationDescription", e.target.value)}
+                className={fieldClass(!!errors.locationDescription)}
+              />
+              {errors.locationDescription && <p className={errorClass}>{errors.locationDescription}</p>}
             </label>
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Safety & security information</span>
@@ -242,16 +375,25 @@ export default function PartnerApplyPage() {
                 value={form.safetyInfo}
                 onChange={(e) => update("safetyInfo", e.target.value)}
                 placeholder="e.g. CCTV monitored, staffed 24/7, lockable storage room"
-                className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                className={fieldClass(!!errors.safetyInfo)}
               />
+              {errors.safetyInfo && <p className={errorClass}>{errors.safetyInfo}</p>}
             </label>
             <label className="block">
               <span className="text-sm font-medium text-ink-700">Total capacity (bags)</span>
-              <input type="number" min={1} value={form.capacityTotal} onChange={(e) => update("capacityTotal", Number(e.target.value))} className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm" />
+              <input
+                type="number"
+                min={1}
+                value={form.capacityTotal}
+                onChange={(e) => update("capacityTotal", Number(e.target.value))}
+                className={fieldClass(!!errors.capacityTotal)}
+              />
+              {errors.capacityTotal && <p className={errorClass}>{errors.capacityTotal}</p>}
             </label>
             <div>
               <p className="mb-2 text-sm font-medium text-ink-700">Photos of your storage area</p>
               <PhotoUrlsEditor photos={form.photos} onChange={(v) => update("photos", v)} />
+              {errors.photos && <p className={errorClass}>{errors.photos}</p>}
             </div>
           </div>
         )}
@@ -261,10 +403,12 @@ export default function PartnerApplyPage() {
             <div>
               <p className="mb-2 text-sm font-medium text-ink-700">Operating hours</p>
               <OperatingHoursEditor hours={form.operatingHours} onChange={(v) => update("operatingHours", v)} />
+              {errors.operatingHours && <p className={errorClass}>{errors.operatingHours}</p>}
             </div>
             <div>
               <p className="mb-2 text-sm font-medium text-ink-700">Pricing per luggage type</p>
               <PriceRulesEditor rules={form.priceRules} onChange={(v) => update("priceRules", v)} />
+              {errors.priceRules && <p className={errorClass}>{errors.priceRules}</p>}
             </div>
           </div>
         )}
@@ -287,6 +431,7 @@ export default function PartnerApplyPage() {
               />
               I agree to the Luggo partner terms and confirm the information above is accurate.
             </label>
+            {errors.agreedToTerms && <p className={errorClass}>{errors.agreedToTerms}</p>}
           </div>
         )}
 
@@ -297,7 +442,7 @@ export default function PartnerApplyPage() {
             </button>
           )}
           {step < STEPS.length - 1 ? (
-            <button onClick={() => setStep(step + 1)} className="flex-1 rounded-lg bg-brand-600 py-3 font-semibold text-white hover:bg-brand-700">
+            <button onClick={handleContinue} className="flex-1 rounded-lg bg-brand-600 py-3 font-semibold text-white hover:bg-brand-700">
               Continue
             </button>
           ) : (

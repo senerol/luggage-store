@@ -1,12 +1,18 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LocateFixed, Search } from "lucide-react";
 import toast from "react-hot-toast";
 
-export function SearchBar({ className }: { className?: string }) {
+export function SearchBar({ className, defaultValue }: { className?: string; defaultValue?: string }) {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(defaultValue ?? "");
   const [locating, setLocating] = useState(false);
+
+  // Keep the input in sync when the page's own URL-driven search text
+  // changes from outside this component (e.g. browser back/forward).
+  useEffect(() => {
+    setQuery(defaultValue ?? "");
+  }, [defaultValue]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

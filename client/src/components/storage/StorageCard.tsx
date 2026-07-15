@@ -46,10 +46,10 @@ export function StorageCard({ location }: { location: StorageLocationSummary }) 
         <p className="flex items-center gap-1 text-sm text-ink-500 line-clamp-1">
           <MapPin className="h-3.5 w-3.5 shrink-0" />
           {location.address}
-          {location.distanceKm !== null && (
-            <span className="ml-1 shrink-0 font-medium text-ink-600">· {location.distanceKm} km</span>
-          )}
         </p>
+        {location.distanceKm !== null && (
+          <p className="text-sm font-medium text-brand-700">{location.distanceKm} km away</p>
+        )}
 
         <p className="flex items-center gap-1 text-xs text-ink-400">
           <Clock className="h-3.5 w-3.5" />

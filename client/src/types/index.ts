@@ -19,6 +19,14 @@ export type ApplicationStatus = "PENDING_REVIEW" | "CHANGES_REQUESTED" | "APPROV
 
 export type PayoutStatus = "PENDING" | "PAID";
 
+// See server/src/services/storageService.ts for the full flow this drives.
+export type SearchMode = "BROWSE" | "USER_LOCATION" | "SEARCHED_LOCATION" | "NAME_MATCH" | "UNRESOLVED";
+
+export interface SearchMeta {
+  mode: SearchMode;
+  resolvedLocation: { label: string; latitude: number; longitude: number } | null;
+}
+
 export interface User {
   id: string;
   name: string;

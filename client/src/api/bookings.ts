@@ -6,6 +6,7 @@ export interface CreateBookingInput {
   dropoffAt: string;
   pickupAt: string;
   items: { luggageType: LuggageType; quantity: number }[];
+  clientUtcOffsetMinutes: number;
 }
 
 export async function createBooking(input: CreateBookingInput): Promise<Booking> {

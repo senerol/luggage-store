@@ -11,3 +11,16 @@ export const CHECK_IN_EARLY_WINDOW_MINUTES = 60;
 
 // Reviews can only be left after luggage has actually been collected.
 export const REVIEWABLE_STATUSES = ["COLLECTED"] as const;
+
+// The IANA timezone "open now" status is evaluated in (see
+// utils/operatingHours.ts's isCurrentlyOpen). There is no per-location
+// timezone stored in the schema today, and every seeded/current storage
+// location is in Delhi, India - so this single, explicit constant is the
+// app's current timezone assumption, applied consistently everywhere
+// "is this location open right now" is computed, rather than left to
+// silently default to whatever timezone the server process happens to run
+// in (UTC, inside this project's Docker containers). If Luggo ever expands
+// outside India, each StorageLocation would need its own stored IANA
+// timezone and isCurrentlyOpen would take that instead of this constant -
+// the function is already written to accept any IANA zone name.
+export const STORAGE_TIMEZONE = "Asia/Kolkata";

@@ -1,5 +1,5 @@
 import { api } from "./client";
-import { ApiEnvelope, AvailabilityResult, LuggageType, Review, StorageLocationSummary } from "@/types";
+import { ApiEnvelope, AvailabilityResult, LuggageType, Review, SearchMeta, StorageLocationSummary } from "@/types";
 
 export interface SearchParams {
   lat?: number;
@@ -15,9 +15,14 @@ export interface SearchParams {
   sort?: "distance" | "price" | "rating";
 }
 
-export async function searchStorage(params: SearchParams): Promise<StorageLocationSummary[]> {
-  const res = await api.get<ApiEnvelope<{ results: StorageLocationSummary[] }>>("/storage", { params });
-  return res.data.data.results;
+export interface SearchResponse {
+  results: StorageLocationSummary[];
+  meta: SearchMeta;
+}
+
+export async function searchStorage(params: SearchParams): Promise<SearchResponse> {
+  const res = await api.get<ApiEnvelope<SearchResponse & { count: number }>>("/storage", { params });
+  return { results: res.data.data.results, meta: res.data.data.meta };
 }
 
 export async function getStorageById(id: string): Promise<StorageLocationSummary> {
@@ -29,10 +34,11 @@ export async function checkStorageAvailability(
   id: string,
   dropoffAt: string,
   pickupAt: string,
-  bags: number
+  bags: number,
+  clientUtcOffsetMinutes: number
 ): Promise<AvailabilityResult> {
   const res = await api.get<ApiEnvelope<{ availability: AvailabilityResult }>>(`/storage/${id}/availability`, {
-    params: { dropoffAt, pickupAt, bags },
+    params: { dropoffAt, pickupAt, bags, clientUtcOffsetMinutes },
   });
   return res.data.data.availability;
 }

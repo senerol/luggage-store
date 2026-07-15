@@ -49,7 +49,7 @@ export default function LandingPage() {
 
   useEffect(() => {
     searchStorage({ sort: "rating" })
-      .then((results) => setFeatured(results.slice(0, 4)))
+      .then(({ results }) => setFeatured(results.slice(0, 4)))
       .catch(() => setError("Couldn't load featured locations right now."));
   }, []);
 

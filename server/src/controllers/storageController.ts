@@ -4,8 +4,8 @@ import * as storageService from "../services/storageService";
 import * as bookingService from "../services/bookingService";
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
-  const results = await storageService.searchStorageLocations(req.query as any);
-  res.status(200).json({ success: true, data: { results, count: results.length } });
+  const { results, meta } = await storageService.searchStorageLocations(req.query as any);
+  res.status(200).json({ success: true, data: { results, count: results.length, meta } });
 });
 
 export const getById = asyncHandler(async (req: Request, res: Response) => {

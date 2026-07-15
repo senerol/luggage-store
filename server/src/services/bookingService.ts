@@ -46,7 +46,12 @@ export async function checkAvailability(storageLocationId: string, query: Availa
 
   await prisma.$transaction((tx) => expireStaleBookings(tx, storageLocationId));
 
-  const withinHours = isWithinOperatingWindow(location.operatingHours, query.dropoffAt, query.pickupAt);
+  const withinHours = isWithinOperatingWindow(
+    location.operatingHours,
+    query.dropoffAt,
+    query.pickupAt,
+    query.clientUtcOffsetMinutes
+  );
   const available = await getAvailableCapacity(
     prisma,
     storageLocationId,
@@ -94,7 +99,9 @@ export async function createBooking(userId: string, input: CreateBookingInput) {
       throw AppError.notFound("Storage location not found or not accepting bookings.");
     }
 
-    if (!isWithinOperatingWindow(location.operatingHours, input.dropoffAt, input.pickupAt)) {
+    if (
+      !isWithinOperatingWindow(location.operatingHours, input.dropoffAt, input.pickupAt, input.clientUtcOffsetMinutes)
+    ) {
       throw AppError.badRequest("Selected drop-off/pickup time is outside this location's operating hours.");
     }
 

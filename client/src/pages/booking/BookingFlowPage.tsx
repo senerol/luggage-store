@@ -66,11 +66,17 @@ export default function BookingFlowPage() {
     }
     setCheckingAvailability(true);
     try {
+      // Sent alongside the UTC instant so the backend can recover the
+      // wall-clock time actually shown in this browser (see
+      // server/src/utils/operatingHours.ts) - without it, a server running
+      // in a different timezone than the customer would check operating
+      // hours against the wrong hour/day.
       const result = await checkStorageAvailability(
         location!.id,
         new Date(dropoffAt).toISOString(),
         new Date(pickupAt).toISOString(),
-        totalBags
+        totalBags,
+        new Date(dropoffAt).getTimezoneOffset()
       );
       setAvailability(result);
       setStep(2);
@@ -94,6 +100,7 @@ export default function BookingFlowPage() {
         dropoffAt: new Date(dropoffAt).toISOString(),
         pickupAt: new Date(pickupAt).toISOString(),
         items,
+        clientUtcOffsetMinutes: new Date(dropoffAt).getTimezoneOffset(),
       });
       toast.success("Booking created — complete payment to confirm.");
       navigate(`/payment/${booking.id}`);

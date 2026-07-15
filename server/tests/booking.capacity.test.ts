@@ -99,6 +99,7 @@ describe("capacity overlap accounting", () => {
       dropoffAt,
       pickupAt,
       items: [{ luggageType: "BACKPACK", quantity: 3 }],
+      clientUtcOffsetMinutes: 0,
     });
 
     const nonOverlapping = window(20, 22);
@@ -134,6 +135,7 @@ describe("overbooking prevention", () => {
       dropoffAt,
       pickupAt,
       items: [{ luggageType: "BACKPACK", quantity: 4 }],
+      clientUtcOffsetMinutes: 0,
     });
 
     await expect(
@@ -142,6 +144,7 @@ describe("overbooking prevention", () => {
         dropoffAt: window(31, 33).dropoffAt,
         pickupAt: window(31, 33).pickupAt,
         items: [{ luggageType: "BACKPACK", quantity: 2 }], // 4 + 2 > 5
+        clientUtcOffsetMinutes: 0,
       })
     ).rejects.toThrow(AppError);
   });
@@ -152,6 +155,7 @@ describe("overbooking prevention", () => {
       dropoffAt: window(31, 33).dropoffAt,
       pickupAt: window(31, 33).pickupAt,
       items: [{ luggageType: "BACKPACK", quantity: 1 }], // 4 + 1 == 5, exactly full
+      clientUtcOffsetMinutes: 0,
     });
     expect(booking.status).toBe("PENDING_PAYMENT");
   });
@@ -166,12 +170,14 @@ describe("overbooking prevention", () => {
         dropoffAt,
         pickupAt,
         items: [{ luggageType: "BACKPACK", quantity: 3 }],
+        clientUtcOffsetMinutes: 0,
       }),
       createBooking(customerB, {
         storageLocationId,
         dropoffAt,
         pickupAt,
         items: [{ luggageType: "BACKPACK", quantity: 3 }],
+        clientUtcOffsetMinutes: 0,
       }),
     ]);
 

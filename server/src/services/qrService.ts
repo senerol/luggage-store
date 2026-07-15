@@ -2,8 +2,9 @@ import QRCode from "qrcode";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
 import { assertTransition } from "./bookingStateMachine";
-import { CHECK_IN_EARLY_WINDOW_MINUTES } from "../config/constants";
+import { CHECK_IN_EARLY_WINDOW_MINUTES, STORAGE_TIMEZONE } from "../config/constants";
 import { getBookingById } from "./bookingService";
+import { formatInTimeZone } from "../utils/operatingHours";
 import { Role } from "@prisma/client";
 
 /**
@@ -74,10 +75,14 @@ export async function verifyAndProcessQr(partnerUserId: string, token: string) {
       throw AppError.conflict(`Booking is ${booking.status}; it cannot be checked in.`);
     }
 
+    // now/windowStart are both real instants (absolute points on the UTC
+    // timeline), so this comparison is correct regardless of what timezone
+    // this process happens to run in - only the message below needs a
+    // timezone conversion, to be readable by a human.
     const windowStart = new Date(booking.dropoffAt.getTime() - CHECK_IN_EARLY_WINDOW_MINUTES * 60 * 1000);
     if (now < windowStart) {
       throw AppError.badRequest(
-        `Too early to check in. Check-in opens at ${windowStart.toLocaleString()}.`
+        `Too early to check in. Check-in opens at ${formatInTimeZone(windowStart, STORAGE_TIMEZONE)} IST.`
       );
     }
     if (now > booking.pickupAt) {
