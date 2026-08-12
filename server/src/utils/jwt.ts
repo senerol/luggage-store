@@ -60,3 +60,4 @@ export function clearAuthCookies(res: Response) {
   res.clearCookie(ACCESS_COOKIE, baseCookieOptions);
   res.clearCookie(REFRESH_COOKIE, baseCookieOptions);
 }
+export { ACCESS_COOKIE, REFRESH_COOKIE };
