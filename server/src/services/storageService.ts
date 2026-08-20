@@ -147,7 +147,7 @@ export async function searchStorageLocations(query: NearbyQuery): Promise<{ resu
     const geocoded = await geocodingService.geocode(query.search!);
     if (geocoded) {
       referencePoint = { latitude: geocoded.latitude, longitude: geocoded.longitude };
-      referenceLabel = geocoded.displayName;
+      referenceLabel = query.search!;
       mode = "SEARCHED_LOCATION";
     } else {
       mode = "UNRESOLVED";
