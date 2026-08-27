@@ -45,7 +45,7 @@ export function Footer() {
         </div>
       </div>
       <div className="border-t border-ink-800 px-4 py-5 text-center text-xs text-ink-500">
-        © {new Date().getFullYear()} Luggo. A student/portfolio project — not a real payment processor.
+        © {new Date().getFullYear()} Luggo. 
       </div>
     </footer>
   );
